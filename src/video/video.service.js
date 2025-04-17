@@ -1,7 +1,6 @@
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { rm } from "fs/promises";
-
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
@@ -26,6 +25,8 @@ export const S3_upload = async (fileName, userId) => {
     throw new Error("Invalid user id");
   }
 
+  const directoryPath = path.join(process.cwd(), "uploads", fileName);
+
   try {
     const S3_fileName = `${userId}/${fileName}/video.webm`;
     const videoPath = path.join(
@@ -34,12 +35,21 @@ export const S3_upload = async (fileName, userId) => {
       fileName,
       "video.webm"
     );
+
+    // Check if file exists before proceeding
+    if (!fs.existsSync(videoPath)) {
+      throw new Error("Video file not found");
+    }
+
     const fileStream = fs.createReadStream(videoPath);
 
     fileStream.on("error", (err) => {
       console.error("File Error", err);
+      throw err;
     });
-    // Check if the file exists before uploading
+
+    // Get file stats for Content-Length
+    const stats = fs.statSync(videoPath);
 
     const upload = new Upload({
       client: S3,
@@ -59,21 +69,29 @@ export const S3_upload = async (fileName, userId) => {
     console.log("Upload complete:", result);
 
     const date = new Date();
-    insertOne({
+    await insertOne({
       userId,
       s3_key: S3_fileName,
       uuid: fileName,
-      title: "Your Recoording!!",
+      title: "Your Recording!!",
       createdAt: date,
       updatedAt: date,
     });
 
-    const directoryPath = path.join(process.cwd(), "uploads", fileName);
+    // Only delete after successful upload and database insertion
     await rm(directoryPath, { recursive: true, force: true });
+    console.log("Local files cleaned up successfully");
 
     return result;
   } catch (error) {
-    console.log("Error uploading to S3:", error);
-    throw new Error("Error uploading to S3");
+    console.error("Error in S3 upload process:", error);
+    // Attempt cleanup on error
+    try {
+      await rm(directoryPath, { recursive: true, force: true });
+      console.log("Cleaned up local files after error");
+    } catch (cleanupError) {
+      console.error("Error during cleanup:", cleanupError);
+    }
+    throw error;
   }
 };
